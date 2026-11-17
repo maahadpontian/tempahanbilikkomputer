@@ -201,6 +201,18 @@
     .tag-blok{background:#e5e7eb;color:#374151}
     .chip-on{background:linear-gradient(135deg,#7c3aed,#a78bfa);color:#fff}
     .closed-card{background:linear-gradient(135deg,#f3f4f6,#fff);border:1px solid #d1d5db;color:#374151}
+    .datebar-top{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 16px}
+    .week{padding:12px 12px 14px}
+    .week-nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+    .week-lbl{font-size:12px;font-weight:800;color:#4c1d95}
+    .week-days{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+    .wd{border:1.5px solid #ede9fe;border-radius:14px;padding:9px 0;display:flex;flex-direction:column;align-items:center;gap:3px;font:inherit;cursor:pointer;background:#fff;color:#1e1b4b;transition:transform .15s,box-shadow .2s;min-width:0}
+    .wd:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 8px 16px -12px #4c1d95}
+    .wd:disabled{opacity:.35;cursor:not-allowed}
+    .wd-n{font-size:9px;font-weight:800;letter-spacing:.5px;opacity:.8}
+    .wd-d{font-size:16px;font-weight:900}
+    .wd.is-sel{outline:2px solid #4c1d95;outline-offset:1px}
+    .wd.is-today .wd-d{text-decoration:underline;text-underline-offset:3px}
     @media (max-width:420px){.board{gap:6px}.stat b{font-size:20px}}
   </style>
 </head>
@@ -762,6 +774,52 @@ function CalTab({ date, counts, blocked, holidays, onPick }) {
     h("div", { className: "muted center" }, "Klik mana-mana tarikh untuk lihat & tempah"));
 }
 
+/* ───────────── pilih nama bila tekan slot ───────────── */
+function NamePickModal({ slot, guru, onPick, onClose }) {
+  const [v, setV] = useState("");
+  return h(Modal, { onClose },
+    h("div", { className: "center" },
+      h("div", { className: "big-emoji" }, "👩‍🏫"),
+      h("h3", null, "Siapa nak tempah?"),
+      h("div", { className: "muted" }, "Slot " + slot.id + " · " + slot.time)),
+    h("select", { className: "field", style: { marginTop: 14 }, value: v, onChange: e => setV(e.target.value) },
+      h("option", { value: "" }, "— Pilih nama —"),
+      guru.map(n => h("option", { key: n, value: n }, n))),
+    h("button", { className: "btn btn-primary block", disabled: !v, onClick: () => onPick(v) }, "Teruskan"),
+    h("button", { className: "btn btn-ghost block", onClick: onClose }, "Batal"));
+}
+
+/* ───────────── strip minggu ───────────── */
+function dayState(ds, counts, blocked, holidays) {
+  const bk = blocked[ds];
+  const n = counts[ds] || 0;
+  if (bk && bk.n >= AVAIL.length) return "c-tutup";
+  if (isCuti(ds, holidays)) return "c-cuti";
+  if (n >= 8) return "c-penuh";
+  if (n > 0) return "c-ada";
+  return "c-kosong";
+}
+function WeekStrip({ date, setDate, today, counts, blocked, holidays }) {
+  const start = addDays(date, -new Date(date + "T00:00:00").getDay());
+  const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
+  const lbl = fmtDate(days[0], { day: "numeric", month: "short" }) + " – " + fmtDate(days[6], { day: "numeric", month: "short", year: "numeric" });
+  return h("div", { className: "glass week" },
+    h("div", { className: "week-nav" },
+      h("button", { className: "icon-btn", disabled: days[0] <= today, onClick: () => setDate(addDays(date, -7)), "aria-label": "Minggu sebelum" }, "‹"),
+      h("div", { className: "week-lbl" }, lbl),
+      h("button", { className: "icon-btn", onClick: () => setDate(addDays(date, 7)), "aria-label": "Minggu seterusnya" }, "›")),
+    h("div", { className: "week-days" }, days.map(ds => {
+      const st = dayState(ds, counts, blocked, holidays);
+      return h("button", {
+        key: ds, type: "button", disabled: ds < today,
+        className: "wd " + st + (ds === date ? " is-sel" : "") + (ds === today ? " is-today" : ""),
+        onClick: () => setDate(ds)
+      },
+        h("span", { className: "wd-n" }, DAYS[new Date(ds + "T00:00:00").getDay()]),
+        h("span", { className: "wd-d" }, Number(ds.slice(8))));
+    })));
+}
+
 /* ───────────── borang tempah ───────────── */
 function SlotBoard({ bookings, selected, onToggle, wholeDay, admin }) {
   const tile = slot => {
@@ -1219,6 +1277,8 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const [nonce, setNonce] = useState(0);
+  const [showCal, setShowCal] = useState(false);
+  const [pendingSlot, setPendingSlot] = useState(null);
 
   const today = todayStr();
   const cuti = isCuti(date, holidays);
@@ -1280,6 +1340,7 @@ function App() {
 
   /* pilihan slot */
   function toggle(slot) {
+    if (!nama && !admin) { setPendingSlot(slot); return; }
     if (wholeDay || (slot.nilam && !admin) || bookings.some(b => b.slot === slot.id)) return;
     if (slot.id === "Petang" && selected.includes("Malam")) return;
     if (slot.id === "Malam" && selected.includes("Petang")) return;
@@ -1374,13 +1435,18 @@ function App() {
   }
 
   /* ─── bahagian UI ─── */
-  const dateBar = h("div", { className: "glass datebar" },
-    h("button", { className: "arrow", disabled: date <= today, onClick: () => setDate(addDays(date, -1)), "aria-label": "Hari sebelum" }, "‹"),
-    h("label", { className: "dt" },
-      h("div", { className: "eyebrow" }, date === today ? "Hari ini" : "Tarikh dipilih"),
-      h("div", { className: "dt-big" }, fmtDate(date, { weekday: "long", day: "numeric", month: "short" })),
-      h("input", { type: "date", className: "mini-date", value: date, min: today, onChange: e => e.target.value && setDate(e.target.value) })),
-    h("button", { className: "arrow", onClick: () => setDate(addDays(date, 1)), "aria-label": "Hari seterusnya" }, "›"));
+  const dateBar = h(React.Fragment, null,
+    h("div", { className: "glass datebar-top" },
+      h("div", null,
+        h("div", { className: "eyebrow" }, date === today ? "Hari ini" : "Tarikh dipilih"),
+        h("div", { className: "dt-big" }, fmtDate(date, { weekday: "long", day: "numeric", month: "long" }))),
+      h("button", { className: "chip " + (showCal ? "chip-on" : ""), onClick: () => setShowCal(s => !s) },
+        showCal ? "✕ Tutup" : "📅 Kalendar")),
+    h(WeekStrip, { date, setDate, today, counts: cal.counts, blocked: cal.blocked, holidays }),
+    showCal && h(MonthCalendar, {
+      date, counts: cal.counts, blocked: cal.blocked, holidays,
+      onPick: d => { setDate(d); setShowCal(false); }
+    }));
 
   const statsCard = cuti
     ? h("div", { className: "glass" },
@@ -1404,10 +1470,10 @@ function App() {
     })));
 
   const nameCard = h("div", { className: "glass" },
-    h("div", { className: "eyebrow" }, "1 · Nama guru"),
+    h("div", { className: "eyebrow" }, "2 · Nama guru"),
     h("select", {
       className: "field", style: { marginTop: 8 }, value: nama,
-      onChange: e => { setNama(e.target.value); setSelected([]); setAlasan(""); setAlasanLain(""); setSema(false); }
+      onChange: e => { setNama(e.target.value); setAlasan(""); setAlasanLain(""); }
     },
       h("option", { value: "" }, "— Pilih nama —"),
       h("option", { value: "PENGURUSAN" }, "⭐ PENGURUSAN"),
@@ -1419,7 +1485,7 @@ function App() {
     h("div", { className: "muted", style: { marginTop: 4 } }, "Tiada tempahan dibenarkan pada tarikh ini."));
 
   const purposeCard = nama && !cuti && !admin && !fullBlocked && h("div", { className: "glass" },
-    h("div", { className: "eyebrow" }, "2 · Tujuan penggunaan"),
+    h("div", { className: "eyebrow" }, "3 · Tujuan penggunaan"),
     h("select", {
       className: "field", style: { marginTop: 8 }, value: alasan,
       onChange: e => setAlasan(e.target.value)
@@ -1431,9 +1497,9 @@ function App() {
       value: alasanLain, onChange: e => setAlasanLain(e.target.value)
     }));
 
-  const boardCard = nama && !cuti && !fullBlocked && h("div", { className: "glass" },
+  const boardCard = !cuti && !fullBlocked && h("div", { className: "glass" },
     h("div", { className: "row-between" },
-      h("div", { className: "eyebrow" }, "3 · Pilih slot"),
+      h("div", { className: "eyebrow" }, "1 · Pilih slot"),
       !admin && h("button", { className: "chip chip-amber", onClick: pickAll }, "⚡ Semua slot")),
     admin && h("label", { className: "check" },
       h("input", { type: "checkbox", checked: wholeDay, onChange: e => toggleWhole(e.target.checked) }),
@@ -1454,10 +1520,10 @@ function App() {
       })));
 
   const bookTab = h(React.Fragment, null,
-    dateBar, statsCard, closedCard, pendingCard, nameCard, purposeCard, boardCard, cutiCard, listCard,
+    dateBar, statsCard, closedCard, pendingCard, boardCard, nameCard, purposeCard, cutiCard, listCard,
     admin && h(AdminPanel, { guru, setGuru, holidays, setHolidays, nonce, onChanged: syncAll, flash }));
 
-  const dock = tab === "book" && nama && !cuti && !fullBlocked && !loadingDay && h("div", { className: "dock" },
+  const dock = tab === "book" && (nama || selected.length > 0) && !cuti && !fullBlocked && !loadingDay && h("div", { className: "dock" },
     h("div", { className: "dock-in" },
       h("div", { className: "dock-info" },
         selected.length === 0
@@ -1487,6 +1553,15 @@ function App() {
     msg && h(Toast, { msg }),
     reminder && h(ReminderModal, { list: todayList, onClose: () => setReminder(false) }),
     showPin && h(PinModal, { onOk: loginAdmin, onClose: () => setShowPin(false) }),
+    pendingSlot && h(NamePickModal, {
+      slot: pendingSlot, guru,
+      onClose: () => setPendingSlot(null),
+      onPick: n => {
+        setNama(n); setAlasan(""); setAlasanLain("");
+        setSelected(p => p.includes(pendingSlot.id) ? p : [...p, pendingSlot.id]);
+        setPendingSlot(null);
+      }
+    }),
     dayModal && h(DayModal, {
       ds: dayModal, holidays, onClose: () => setDayModal(null),
       onBook: d => { setDate(d); setTab("book"); setDayModal(null); }
